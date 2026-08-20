@@ -2,12 +2,13 @@ package api
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
-	"time"
+	"regexp"
 
 	"northstar-sync/internal/cache"
 )
+
+var skuPattern = regexp.MustCompile(`^[A-Za-z0-9\-]{1,40}$`)
 
 type Handlers struct {
 	store *cache.Store
@@ -21,7 +22,11 @@ func NewHandlers(store *cache.Store, ready func() bool) *Handlers {
 func (h *Handlers) StockBySKU(w http.ResponseWriter, r *http.Request) {
 	sku := r.URL.Query().Get("sku")
 	if sku == "" {
-		http.Error(w, "missing sku query parameter", http.StatusBadRequest)
+		http.Error(w, `{"error":"missing sku query parameter"}`, http.StatusBadRequest)
+		return
+	}
+	if !skuPattern.MatchString(sku) {
+		http.Error(w, `{"error":"invalid sku format"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -51,14 +56,11 @@ func (h *Handlers) AllStock(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Health is liveness: "is the process running at all". Always 200 if the server can respond.
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-// Ready is readiness: "has this instance ever successfully populated its cache".
-// A load balancer should stop sending traffic here if this returns non-200.
 func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 	if !h.ready() {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -67,29 +69,4 @@ func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ready"))
-}
-
-// LoggingMiddleware logs method, path, status, and latency for every request.
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		slog.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration", time.Since(start),
-		)
-	})
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
 }
