@@ -43,9 +43,17 @@ func main() {
 	mux.HandleFunc("/health", h.Health)
 	mux.HandleFunc("/ready", h.Ready)
 
+	limiter := api.NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst)
+
+	var handler http.Handler = mux
+	handler = limiter.Middleware(handler)
+	handler = api.AuthMiddleware(cfg.APIKey, handler)
+	handler = api.LoggingMiddleware(handler)
+	handler = api.SecurityHeadersMiddleware(handler)
+
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
-		Handler:      api.LoggingMiddleware(mux),
+		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}

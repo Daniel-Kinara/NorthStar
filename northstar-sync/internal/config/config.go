@@ -13,6 +13,9 @@ type Config struct {
 	ServerPort      string
 	RequestTimeout  time.Duration
 	MaxRetries      int
+	APIKey          string
+	RateLimitPerSec float64
+	RateLimitBurst  float64
 }
 
 func Load() (Config, error) {
@@ -22,6 +25,8 @@ func Load() (Config, error) {
 		PollInterval:    5 * time.Minute,
 		RequestTimeout:  10 * time.Second,
 		MaxRetries:      3,
+		RateLimitPerSec: 5,
+		RateLimitBurst:  10,
 	}
 
 	if v := os.Getenv("POLL_INTERVAL_SECONDS"); v != "" {
@@ -38,6 +43,27 @@ func Load() (Config, error) {
 			return cfg, fmt.Errorf("MAX_RETRIES must be a non-negative integer, got %q", v)
 		}
 		cfg.MaxRetries = n
+	}
+
+	if v := os.Getenv("RATE_LIMIT_PER_SEC"); v != "" {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("RATE_LIMIT_PER_SEC must be a positive number, got %q", v)
+		}
+		cfg.RateLimitPerSec = n
+	}
+
+	if v := os.Getenv("RATE_LIMIT_BURST"); v != "" {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("RATE_LIMIT_BURST must be a positive number, got %q", v)
+		}
+		cfg.RateLimitBurst = n
+	}
+
+	cfg.APIKey = os.Getenv("API_KEY")
+	if cfg.APIKey == "" {
+		return cfg, fmt.Errorf("API_KEY must be set (generate one locally with: openssl rand -hex 32)")
 	}
 
 	if cfg.WarehouseAPIURL == "" {
