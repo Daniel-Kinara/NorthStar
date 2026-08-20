@@ -1,58 +1,64 @@
 package poller
 
 import (
-	"log"
+	"context"
+	"log/slog"
+	"sync"
 	"time"
 
 	"northstar-sync/internal/cache"
 	"northstar-sync/internal/warehouse"
 )
 
-// Poller repeatedly pulls stock from the warehouse and refreshes the cache.
 type Poller struct {
 	client   *warehouse.Client
 	store    *cache.Store
 	interval time.Duration
-	stopCh   chan struct{}
+
+	mu      sync.RWMutex
+	lastErr error
 }
 
 func New(client *warehouse.Client, store *cache.Store, interval time.Duration) *Poller {
-	return &Poller{
-		client:   client,
-		store:    store,
-		interval: interval,
-		stopCh:   make(chan struct{}),
+	return &Poller{client: client, store: store, interval: interval}
+}
+
+// Start runs one poll immediately, then keeps polling until ctx is cancelled.
+// It blocks the caller until the background goroutine has exited — call it with `go p.Start(ctx)`.
+func (p *Poller) Start(ctx context.Context) {
+	p.runOnce(ctx)
+
+	ticker := time.NewTicker(p.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			p.runOnce(ctx)
+		case <-ctx.Done():
+			slog.Info("poller stopping", "reason", ctx.Err())
+			return
+		}
 	}
 }
 
-// Start runs one poll immediately, then keeps polling on a ticker in the background.
-func (p *Poller) Start() {
-	p.runOnce()
-
-	ticker := time.NewTicker(p.interval)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				p.runOnce()
-			case <-p.stopCh:
-				return
-			}
-		}
-	}()
+func (p *Poller) LastError() error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lastErr
 }
 
-func (p *Poller) Stop() {
-	close(p.stopCh)
-}
+func (p *Poller) runOnce(ctx context.Context) {
+	items, err := p.client.FetchStock(ctx)
 
-func (p *Poller) runOnce() {
-	items, err := p.client.FetchStock()
+	p.mu.Lock()
+	p.lastErr = err
+	p.mu.Unlock()
+
 	if err != nil {
-		log.Printf("poll failed: %v", err)
+		slog.Error("poll failed", "error", err)
 		return
 	}
 	p.store.Replace(items)
-	log.Printf("poll succeeded: cached %d items", len(items))
+	slog.Info("poll succeeded", "itemCount", len(items))
 }

@@ -2,20 +2,22 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"northstar-sync/internal/cache"
 )
 
 type Handlers struct {
 	store *cache.Store
+	ready func() bool
 }
 
-func NewHandlers(store *cache.Store) *Handlers {
-	return &Handlers{store: store}
+func NewHandlers(store *cache.Store, ready func() bool) *Handlers {
+	return &Handlers{store: store, ready: ready}
 }
 
-// GET /stock?sku=NS-1001
 func (h *Handlers) StockBySKU(w http.ResponseWriter, r *http.Request) {
 	sku := r.URL.Query().Get("sku")
 	if sku == "" {
@@ -39,7 +41,6 @@ func (h *Handlers) StockBySKU(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /stock/all
 func (h *Handlers) AllStock(w http.ResponseWriter, r *http.Request) {
 	items, updatedAt := h.store.All()
 	w.Header().Set("Content-Type", "application/json")
@@ -50,8 +51,45 @@ func (h *Handlers) AllStock(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /health
+// Health is liveness: "is the process running at all". Always 200 if the server can respond.
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
+}
+
+// Ready is readiness: "has this instance ever successfully populated its cache".
+// A load balancer should stop sending traffic here if this returns non-200.
+func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("not ready"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ready"))
+}
+
+// LoggingMiddleware logs method, path, status, and latency for every request.
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration", time.Since(start),
+		)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
 }
